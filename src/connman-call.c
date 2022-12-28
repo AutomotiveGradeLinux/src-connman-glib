@@ -244,9 +244,9 @@ GVariant *connman_get_properties(struct connman_state *ns,
 		else
 			g_set_error(error, CONNMAN_ERROR, CONNMAN_ERROR_ILLEGAL_ARGUMENT,
 				    "No %s", access_type);
+	} else {
+		DEBUG("properties: %s", g_variant_print(reply, TRUE));
 	}
-
-	DEBUG("properties: %s", g_variant_print(reply, TRUE));
 
 	return reply;
 }
