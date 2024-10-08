@@ -50,6 +50,7 @@ struct connman_state {
 	guint registration_id;
 	gchar *agent_path;
 	gboolean agent_registered;
+	GMutex agent_state_mutex;
 };
 
 struct init_data {
@@ -57,9 +58,7 @@ struct init_data {
 	GMutex mutex;
 	gboolean register_agent;
 	gboolean init_done;
-	struct connman_state *ns; /* before setting afb_api_set_userdata() */
 	gboolean rc;
-	void (*init_done_cb)(struct init_data *id, gboolean rc);
 };
 
 extern void connman_log(connman_log_level_t level, const char *func, const char *format, ...)

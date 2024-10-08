@@ -27,7 +27,7 @@
 
 #include "common.h"
 
-int connman_register_agent(struct init_data *id);
+int connman_register_agent(struct connman_state *ns);
 
 void connman_unregister_agent(struct connman_state *ns);
 

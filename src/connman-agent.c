@@ -144,12 +144,11 @@ static void on_bus_acquired(GDBusConnection *connection,
 			    const gchar *name,
 			    gpointer user_data)
 {
-	struct init_data *id = user_data;
-	struct connman_state *ns = id->ns;
+	struct connman_state *ns = user_data;
 	GVariant *result;
 	GError *error = NULL;
 
-	INFO("agent bus acquired - registering %s", ns->agent_path);
+	DEBUG("agent bus acquired - registering %s", ns->agent_path);
 
 	ns->registration_id =
 		g_dbus_connection_register_object(connection,
@@ -177,33 +176,28 @@ static void on_bus_acquired(GDBusConnection *connection,
 
 	ns->agent_registered = TRUE;
 
-	INFO("agent registered at %s", ns->agent_path);
-	if (id->init_done_cb)
-		(*id->init_done_cb)(id, TRUE);
-
+	DEBUG("agent registered at %s", ns->agent_path);
 	return;
 
 err_unable_to_register_connman:
 	 g_dbus_connection_unregister_object(ns->conn, ns->registration_id);
 	 ns->registration_id = 0;
 err_unable_to_register_bus:
-	if (id->init_done_cb)
-		(*id->init_done_cb)(id, FALSE);
+	 return;
 }
 
-int connman_register_agent(struct init_data *id)
+int connman_register_agent(struct connman_state *ns)
 {
-	struct connman_state *ns = id->ns;
-
+	g_mutex_lock(&ns->agent_state_mutex);
 	ns->agent_path = g_strdup_printf("%s/agent%d", CONNMAN_PATH, getpid());
 	if (!ns->agent_path) {
-		ERROR("can't create agent path");
+		ERROR("Cannot create agent path");
 		goto out_no_agent_path;
 	}
 
 	ns->introspection_data = g_dbus_node_info_new_for_xml(introspection_xml, NULL);
 	if (!ns->introspection_data) {
-		ERROR("can't create introspection data");
+		ERROR("Cannot create introspection data");
 		goto out_no_introspection_data;
 	}
 
@@ -214,26 +208,38 @@ int connman_register_agent(struct init_data *id)
 				      on_bus_acquired,
 				      NULL,
 				      NULL,
-				      id,
+				      ns,
 				      NULL);
 	if (!ns->agent_id) {
-		ERROR("can't create agent bus instance");
+		ERROR("Cannot create agent bus instance");
 		goto out_no_bus_name;
 	}
-
+	g_mutex_unlock(&ns->agent_state_mutex);
 	return 0;
 
 out_no_bus_name:
 	g_dbus_node_info_unref(ns->introspection_data);
+	ns->introspection_data = NULL;
 out_no_introspection_data:
 	g_free(ns->agent_path);
+	ns->agent_path = NULL;
 out_no_agent_path:
+	g_mutex_unlock(&ns->agent_state_mutex);
 	return -1;
 }
 
 void connman_unregister_agent(struct connman_state *ns)
 {
+	g_mutex_lock(&ns->agent_state_mutex);
+	if (!ns->agent_registered) {
+		WARNING("No agent registered to unregister");
+		return;
+	}
 	g_bus_unown_name(ns->agent_id);
 	g_dbus_node_info_unref(ns->introspection_data);
+	ns->introspection_data = NULL;
 	g_free(ns->agent_path);
+	ns->agent_path = NULL;
+	ns->agent_registered = FALSE;
+	g_mutex_unlock(&ns->agent_state_mutex);
 }

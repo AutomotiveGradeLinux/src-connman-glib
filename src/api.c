@@ -63,6 +63,7 @@ static const char *g_connman_log_level_names[CONNMAN_LOG_LEVEL_DEBUG + 1] = {
 	"DEBUG"
 };
 
+
 // Wrappers to hedge possible future abstractions
 static void connman_set_state(struct connman_state *ns)
 {
@@ -115,6 +116,10 @@ static void callback_add(callback_list_t *callbacks, gpointer callback, gpointer
 	g_mutex_unlock(&callbacks->mutex);
 }
 
+#if 0
+
+// For potential future use
+
 static void callback_remove(callback_list_t *callbacks, gpointer callback)
 {
 	callback_list_entry_t *entry = NULL;
@@ -136,6 +141,8 @@ static void callback_remove(callback_list_t *callbacks, gpointer callback)
 	}
 	g_mutex_unlock(&callbacks->mutex);
 }
+
+#endif
 
 static void run_manager_callbacks(callback_list_t *callbacks,
 				  const gchar *path,
@@ -391,6 +398,8 @@ static struct connman_state *connman_dbus_init(GMainLoop *loop)
 		ERROR("out of memory allocating network state");
 		goto err_no_ns;
 	}
+	g_mutex_init(&ns->cw_mutex);
+	g_mutex_init(&ns->agent_state_mutex);
 
 	INFO("connecting to dbus");
 
@@ -495,37 +504,45 @@ static gpointer connman_handler_func(gpointer ptr)
 	GMainLoop *loop;
 	int rc;
 
-	loop = g_main_loop_new(NULL, FALSE);
+	GMainContext *context = g_main_context_new();
+	if (!context) {
+		ERROR("Unable to create context");
+		goto err_no_context;
+	}
+	g_main_context_push_thread_default(context);
+
+	loop = g_main_loop_new(context, FALSE);
 	if (!loop) {
 		ERROR("Unable to create main loop");
 		goto err_no_loop;
 	}
 
-	// dbus interface init
+	// D-Bbus interface init
+	DEBUG("connman_handler_func: initializing D-Bus connection");
 	ns = connman_dbus_init(loop);
 	if (!ns) {
 		ERROR("connman_dbus_init() failed");
 		goto err_no_ns;
 	}
-
-	id->ns = ns;
-	if (id->register_agent) {
-		rc = connman_register_agent(id);
-		if (rc) {
-			ERROR("network_register_agent() failed");
-			goto err_no_agent;
-		}
-
-		// agent registeration will signal init done
-
-	} else {
-		signal_init_done(id, TRUE);
-	}
+	DEBUG("connman_handler_func: D-Bus initialized");
 
 	connman_set_state(ns);
+
+	signal_init_done(id, TRUE);
+
+	if (id->register_agent) {
+		DEBUG("connman_handler_func: registering agent");
+		rc = connman_register_agent(ns);
+		if (rc) {
+			ERROR("connman_register_agent() failed");
+			goto err_no_agent;
+		}
+	}
+
 	g_main_loop_run(loop);
 
 	g_main_loop_unref(ns->loop);
+	g_free(context);
 
 	connman_unregister_agent(ns);
 
@@ -539,7 +556,9 @@ err_no_agent:
 
 err_no_ns:
 	g_main_loop_unref(loop);
+	g_free(context);
 
+err_no_context:
 err_no_loop:
 	signal_init_done(id, FALSE);
 
@@ -551,13 +570,9 @@ err_no_loop:
 EXPORT gboolean connman_init(gboolean register_agent)
 {
 	struct init_data init_data, *id = &init_data;
-	gint64 end_time;
 
 	memset(id, 0, sizeof(*id));
 	id->register_agent = register_agent;
-	id->init_done = FALSE;
-	id->init_done_cb = signal_init_done;
-	//id->rc = FALSE;
 	g_cond_init(&id->cond);
 	g_mutex_init(&id->mutex);
 
@@ -567,8 +582,8 @@ EXPORT gboolean connman_init(gboolean register_agent)
 
 	INFO("waiting for init done");
 
-	/* wait maximum 10 seconds for init done */
-	end_time = g_get_monotonic_time () + 10 * G_TIME_SPAN_SECOND;
+	// Wait maximum 10 seconds for init done
+	gint64 end_time = g_get_monotonic_time () + 10 * G_TIME_SPAN_SECOND;
 	g_mutex_lock(&id->mutex);
 	while (!id->init_done) {
 		if (!g_cond_wait_until(&id->cond, &id->mutex, end_time))
@@ -587,6 +602,17 @@ EXPORT gboolean connman_init(gboolean register_agent)
 		INFO("connman operational");
 
 	return id->rc;
+}
+
+EXPORT gboolean connman_manager_get_agent_registered(void)
+{
+	struct connman_state *ns = connman_get_state();
+	gboolean registered = FALSE;
+
+	g_mutex_lock(&ns->agent_state_mutex);
+	registered = ns->agent_registered;
+	g_mutex_unlock(&ns->agent_state_mutex);
+	return registered;
 }
 
 EXPORT gboolean connman_manager_get_state(gchar **state)
@@ -920,6 +946,13 @@ EXPORT gboolean connman_service_connect(const gchar *service,
 		ERROR("No service given");
 		return FALSE;
 	}
+	g_mutex_lock(&ns->agent_state_mutex);
+	if (!ns->agent_registered) {
+		ERROR("No agent registered");
+		g_mutex_unlock(&ns->agent_state_mutex);
+		return FALSE;
+	}
+	g_mutex_unlock(&ns->agent_state_mutex);
 
 	cw = call_work_create(ns, "service", service,
 			      "connect_service", "Connect", &error);
@@ -956,6 +989,13 @@ EXPORT gboolean connman_service_disconnect(const gchar *service)
 		ERROR("No service given to move");
 		return FALSE;
 	}
+	g_mutex_lock(&ns->agent_state_mutex);
+	if (!ns->agent_registered) {
+		ERROR("No agent registered");
+		g_mutex_unlock(&ns->agent_state_mutex);
+		return FALSE;
+	}
+	g_mutex_unlock(&ns->agent_state_mutex);
 
 	reply = connman_call(ns, CONNMAN_AT_SERVICE, service,
 			     "Disconnect", NULL, &error);

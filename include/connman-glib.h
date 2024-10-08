@@ -33,7 +33,7 @@ typedef enum {
 
 // Hook to allow users to override the default level
 #ifndef CONNMAN_LOG_LEVEL_DEFAULT
-#define CONNMAN_LOG_LEVEL_DEFAULT CONNMAN_LOG_LEVEL_ERROR
+#define CONNMAN_LOG_LEVEL_DEFAULT CONNMAN_LOG_LEVEL_WARNING
 #endif
 
 typedef enum {
@@ -83,6 +83,8 @@ void connman_add_agent_event_callback(connman_agent_event_cb_t cb,
 void connman_set_log_level(connman_log_level_t level);
 
 gboolean connman_init(gboolean register_agent);
+
+gboolean connman_manager_get_agent_registered(void);
 
 gboolean connman_manager_get_state(gchar **state);
 
